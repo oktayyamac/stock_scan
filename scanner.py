@@ -140,18 +140,19 @@ def load_cfg() -> Cfg:
 def _fetch_symbol_file(url: str) -> pd.DataFrame:
     r = requests.get(url, headers=UA, timeout=30)
     r.raise_for_status()
-    df = pd.read_csv(io.StringIO(r.text), sep="|", dtype=str)
+    # keep_default_na=False: "NA", "NAN" gibi gerçek hisse kodları boş değer sanılmasın
+    df = pd.read_csv(io.StringIO(r.text), sep="|", dtype=str, keep_default_na=False)
     first = df.columns[0]
     return df[~df[first].astype(str).str.startswith("File Creation Time")].copy()
 
 
 def _clean_symbols(df: pd.DataFrame, sym_col: str) -> list[str]:
     df = df.copy()
-    df = df[df["Test Issue"].fillna("N") == "N"]
-    df = df[df["ETF"].fillna("N") == "N"]
-    df = df[~df["Security Name"].fillna("").str.contains(BAD_NAME)]
+    df = df[df["Test Issue"] != "Y"]
+    df = df[df["ETF"] != "Y"]
+    df = df[~df["Security Name"].str.contains(BAD_NAME)]
     syms = df[sym_col].astype(str).str.strip().str.upper().str.replace(".", "-", regex=False)
-    return [s for s in syms if GOOD_SYMBOL.match(s)]
+    return [s for s in syms if isinstance(s, str) and GOOD_SYMBOL.match(s)]
 
 
 def load_universe(kind: str) -> list[str]:
