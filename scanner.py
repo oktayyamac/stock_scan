@@ -60,12 +60,18 @@ INTERVAL_DELTA = {"1m": "1min", "2m": "2min", "5m": "5min", "15m": "15min", "30m
 BARS_PER_DAY = {"1d": 1, "1h": 6.5, "60m": 6.5, "30m": 13, "15m": 26, "5m": 78, "2m": 195, "1m": 390}
 # Zaman dilimine göre varsayılanlar. yfinance sınırları: 1m en fazla ~7 gün, 2m-30m en fazla 60 gün.
 PRESETS = {
-    "1d": dict(period="10mo", lookback=100, min_drop_pct=3.0, line_tol_pct=1.0, break_buf_pct=0.5, max_ext_pct=8.0),
-    "1h": dict(period="60d", lookback=120, min_drop_pct=2.0, line_tol_pct=0.8, break_buf_pct=0.4, max_ext_pct=6.0),
-    "30m": dict(period="30d", lookback=150, min_drop_pct=1.5, line_tol_pct=0.6, break_buf_pct=0.3, max_ext_pct=5.0),
-    "15m": dict(period="10d", lookback=150, min_drop_pct=1.0, line_tol_pct=0.5, break_buf_pct=0.3, max_ext_pct=4.0),
-    "5m": dict(period="10d", lookback=150, min_drop_pct=0.8, line_tol_pct=0.4, break_buf_pct=0.2, max_ext_pct=3.0),
-    "1m": dict(period="5d", lookback=200, min_drop_pct=0.5, line_tol_pct=0.3, break_buf_pct=0.15, max_ext_pct=2.0),
+    "1d": dict(period="10mo", lookback=100, min_drop_pct=3.0, line_tol_pct=1.0, break_buf_pct=0.5, max_ext_pct=8.0,
+               vol_mult=2.0, min_atr_pct=3.0, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=250_000),
+    "1h": dict(period="60d", lookback=120, min_drop_pct=2.0, line_tol_pct=0.8, break_buf_pct=0.4, max_ext_pct=6.0,
+               vol_mult=2.5, min_atr_pct=1.8, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=75_000),
+    "30m": dict(period="30d", lookback=150, min_drop_pct=1.5, line_tol_pct=0.6, break_buf_pct=0.3, max_ext_pct=5.0,
+                vol_mult=3.0, min_atr_pct=1.3, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=40_000),
+    "15m": dict(period="10d", lookback=150, min_drop_pct=1.0, line_tol_pct=0.5, break_buf_pct=0.3, max_ext_pct=4.0,
+                vol_mult=3.0, min_atr_pct=1.0, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=25_000),
+    "5m": dict(period="10d", lookback=150, min_drop_pct=0.8, line_tol_pct=0.4, break_buf_pct=0.2, max_ext_pct=3.0,
+               vol_mult=3.0, min_atr_pct=0.7, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=10_000),
+    "1m": dict(period="5d", lookback=200, min_drop_pct=0.5, line_tol_pct=0.3, break_buf_pct=0.15, max_ext_pct=2.0,
+               vol_mult=3.0, min_atr_pct=0.4, min_range_atr=1.0, min_drop_atr=2.0, min_bar_dollar_vol=3_000),
 }
 
 
@@ -87,6 +93,10 @@ class Cfg:
     min_close_pos: float
     min_price: float
     min_dollar_vol: float
+    min_atr_pct: float
+    min_range_atr: float
+    min_drop_atr: float
+    min_bar_dollar_vol: float
     tp_r: tuple
     atr_n: int
     max_signals: int
@@ -96,23 +106,33 @@ class Cfg:
     sent_file: str
 
 
+def _env(name: str, default):
+    """Ortam değişkeni; tanımsız veya boşsa (GitHub'da tanımsız variable boş gelir) varsayılan."""
+    v = os.getenv(name)
+    return default if v is None or not v.strip() else v.strip()
+
+
 def _f(name: str, default: float) -> float:
-    return float(os.getenv(name, default))
+    return float(_env(name, default))
 
 
 def _i(name: str, default: int) -> int:
-    return int(float(os.getenv(name, default)))
+    return int(float(_env(name, default)))
+
+
+def _s(name: str, default: str) -> str:
+    return str(_env(name, default))
 
 
 def load_cfg() -> Cfg:
-    tp = tuple(float(x) for x in os.getenv("TP_R", "1,2,3").split(",") if x.strip())
+    tp = tuple(float(x) for x in _s("TP_R", "1,2,3").split(",") if x.strip())
     if len(tp) < 3:
         tp = (1.0, 2.0, 3.0)
-    interval = os.getenv("INTERVAL", "15m").strip().lower() or "15m"
+    interval = _s("INTERVAL", "15m").lower()
     p = PRESETS.get("1h" if interval == "60m" else interval, PRESETS["15m"])
     return Cfg(
         interval=interval,
-        period=os.getenv("PERIOD", p["period"]),
+        period=_s("PERIOD", p["period"]),
         lookback=_i("LOOKBACK", p["lookback"]),  # kaç mum geriye bakılsın
         pivot_k=_i("PIVOT_K", 3),                # swing tepesi için sağ/sol mum sayısı
         min_span=_i("MIN_SPAN", 10),             # iki tepe arası en az mum
@@ -122,17 +142,21 @@ def load_cfg() -> Cfg:
         line_tol_pct=_f("LINE_TOL_PCT", p["line_tol_pct"]),    # tepelerin çizgiyi aşabileceği tolerans %
         break_buf_pct=_f("BREAK_BUF_PCT", p["break_buf_pct"]),  # kapanış çizginin en az bu kadar üstünde
         max_ext_pct=_f("MAX_EXT_PCT", p["max_ext_pct"]),        # çizgiden aşırı uzaklaşmışsa (kovalama) alma
-        vol_mult=_f("VOL_MULT", 1.3),
-        min_close_pos=_f("MIN_CLOSE_POS", 0.5),
+        vol_mult=_f("VOL_MULT", p["vol_mult"]),  # kırılım mumu hacmi / son 20 mum ortalaması
+        min_close_pos=_f("MIN_CLOSE_POS", 0.7),  # kapanış mum aralığının üst %30'unda olsun
         min_price=_f("MIN_PRICE", 0.20),
-        min_dollar_vol=_f("MIN_DOLLAR_VOL", 100_000),  # tahmini günlük $ hacim; 0 yaparsan filtre kalkar
+        min_dollar_vol=_f("MIN_DOLLAR_VOL", 250_000),  # tahmini günlük $ hacim; 0 yaparsan filtre kalkar
+        min_atr_pct=_f("MIN_ATR_PCT", p["min_atr_pct"]),        # ATR/fiyat bunun altındaysa hisse "hareketsiz"
+        min_range_atr=_f("MIN_RANGE_ATR", p["min_range_atr"]),  # kırılım mumu en az bu kadar ATR boyunda
+        min_drop_atr=_f("MIN_DROP_ATR", p["min_drop_atr"]),     # çizginin iki tepesi arası düşüş en az bu kadar ATR
+        min_bar_dollar_vol=_f("MIN_BAR_DOLLAR_VOL", p["min_bar_dollar_vol"]),  # kırılım mumunda en az bu kadar $ işlem
         tp_r=tp[:3],
         atr_n=_i("ATR_N", 14),
-        max_signals=_i("MAX_SIGNALS", 15),
+        max_signals=_i("MAX_SIGNALS", 6),
         cooldown_days=_i("COOLDOWN_DAYS", 5),
         batch=_i("BATCH", 200),
-        universe=os.getenv("UNIVERSE", "all").lower(),  # all | nasdaq
-        sent_file=os.getenv("SENT_FILE", "sent_signals.json"),
+        universe=_s("UNIVERSE", "all").lower(),  # all | nasdaq
+        sent_file=_s("SENT_FILE", "sent_signals.json"),
     )
 
 
@@ -263,6 +287,17 @@ def detect_breakout(df: pd.DataFrame, cfg: Cfg) -> Optional[dict]:
     buf = cfg.break_buf_pct / 100
     ext = cfg.max_ext_pct / 100
 
+    # ATR (kırılım mumu hariç son atr_n mum): hareketlilik filtreleri için önce hesaplanır
+    prev_c = cl[:-1]
+    tr = np.maximum.reduce([hi[1:] - lo[1:], np.abs(hi[1:] - prev_c), np.abs(lo[1:] - prev_c)])
+    atr = float(tr[-(cfg.atr_n + 1):-1].mean())
+    if not np.isfinite(atr) or atr <= 0:
+        return None
+    if atr / cl[last] * 100 < cfg.min_atr_pct:          # hareketsiz hisse
+        return None
+    if cl[last] * vol[last] < cfg.min_bar_dollar_vol:   # kırılım mumunda gerçek para girişi yok
+        return None
+
     pivs = find_pivot_highs(hi, cfg.pivot_k)[-8:]
     best = None
     for a in range(len(pivs)):
@@ -271,6 +306,8 @@ def detect_breakout(df: pd.DataFrame, cfg: Cfg) -> Optional[dict]:
             if j - i < cfg.min_span or last - j > cfg.max_anchor_age:
                 continue
             if hi[j] >= hi[i] or (hi[i] - hi[j]) / hi[i] * 100 < cfg.min_drop_pct:
+                continue
+            if hi[i] - hi[j] < cfg.min_drop_atr * atr:   # düşüş normal gürültüden büyük olmalı
                 continue
             slope = (hi[j] - hi[i]) / (j - i)
             line = hi[i] + slope * (np.arange(i, last + 1) - i)  # i..last
@@ -305,11 +342,7 @@ def detect_breakout(df: pd.DataFrame, cfg: Cfg) -> Optional[dict]:
     close_pos = (cl[last] - lo[last]) / rng if rng > 0 else 1.0
     if close_pos < cfg.min_close_pos:
         return None
-
-    prev_c = cl[:-1]
-    tr = np.maximum.reduce([hi[1:] - lo[1:], np.abs(hi[1:] - prev_c), np.abs(lo[1:] - prev_c)])
-    atr = float(tr[-(cfg.atr_n + 1):-1].mean())
-    if not np.isfinite(atr) or atr <= 0:
+    if rng < cfg.min_range_atr * atr:                    # kırılım mumu "genişleme" mumu olmalı
         return None
 
     entry = float(cl[last])
