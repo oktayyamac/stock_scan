@@ -9,12 +9,17 @@ Ne yapar?
      ve SON KAPANMIŞ mumun bu çizgiyi yukarı kırıp kırmadığına bakar.
   4. Kırılım varsa giriş / SL / TP1-TP2-TP3 hesaplar ve Telegram'a gönderir.
 
-Kırılım sayılma şartları (hepsi ayarlanabilir, bkz. load_cfg):
-  - Çizgi en az 2 alçalan swing tepesinden geçer, arada tepeler çizginin üstüne çıkmamış olmalı
-  - Önceki mum çizginin altında/üzerinde değil -> kırılım "taze" (ilk kırılım mumu)
-  - Kırılım mumu çizginin en az %0.5 üstünde kapanır, gün içi aralığın üst yarısında kapanır
-  - Hacim, son 20 mum ortalamasının en az 1.3 katı
-  - Likidite filtresi: fiyat >= 0.20$, tahmini günlük işlem hacmi >= 100K$ (MIN_PRICE / MIN_DOLLAR_VOL)
+Kırılım sayılma şartları (hepsi ayarlanabilir, bkz. load_cfg ve PRESETS):
+  - Çizgi en az 3 tepeye dokunur (MIN_TOUCHES), arada tepeler çizginin üstüne çıkmamış olmalı
+  - Çizginin iki tepesi arası düşüş en az MIN_DROP_PCT ve en az 2 ATR (gürültüden büyük)
+  - Önceki mum çizginin üstünde değil -> kırılım "taze" (ilk kırılım mumu)
+  - Kırılım mumu çizginin üstünde kapanır, mum aralığının üst %30'unda kapanır
+  - Kırılım mumu "genişleme mumu" olmalı: boyu en az 1 ATR (MIN_RANGE_ATR)
+  - Hacim, son 20 mum ortalamasının en az VOL_MULT katı (15m için 3x)
+  - Hareketlilik: ATR/fiyat en az MIN_ATR_PCT (15m için %1); hareketsiz hisseler elenir
+  - Kırılım mumunda en az MIN_BAR_DOLLAR_VOL kadar $ işlem (15m için 25K$)
+  - Sıralama ve üst sınır: her taramada en fazla MAX_SIGNALS (6), günde en fazla MAX_DAILY (20) sinyal
+  - Likidite filtresi: fiyat >= 0.20$, tahmini günlük işlem hacmi >= 250K$ (MIN_PRICE / MIN_DOLLAR_VOL)
 
 Zaman dilimi: varsayılan 15 DAKİKALIK mum (INTERVAL=15m). Diğerleri için INTERVAL=5m / 30m / 1h / 1d
 verilir; her biri için uygun varsayılanlar PRESETS içinde (backtest edilmedi, env ile ezilebilir).
@@ -100,6 +105,7 @@ class Cfg:
     tp_r: tuple
     atr_n: int
     max_signals: int
+    max_daily: int
     cooldown_days: int
     batch: int
     universe: str
@@ -138,7 +144,7 @@ def load_cfg() -> Cfg:
         min_span=_i("MIN_SPAN", 10),             # iki tepe arası en az mum
         max_anchor_age=_i("MAX_ANCHOR_AGE", 60), # ikinci tepe en fazla kaç mum önce
         min_drop_pct=_f("MIN_DROP_PCT", p["min_drop_pct"]),  # iki tepe arası en az düşüş %
-        min_touches=_i("MIN_TOUCHES", 2),
+        min_touches=_i("MIN_TOUCHES", 3),        # çizgiye en az bu kadar tepe dokunmuş olsun (2 nokta her zaman çizgi verir)
         line_tol_pct=_f("LINE_TOL_PCT", p["line_tol_pct"]),    # tepelerin çizgiyi aşabileceği tolerans %
         break_buf_pct=_f("BREAK_BUF_PCT", p["break_buf_pct"]),  # kapanış çizginin en az bu kadar üstünde
         max_ext_pct=_f("MAX_EXT_PCT", p["max_ext_pct"]),        # çizgiden aşırı uzaklaşmışsa (kovalama) alma
@@ -152,7 +158,8 @@ def load_cfg() -> Cfg:
         min_bar_dollar_vol=_f("MIN_BAR_DOLLAR_VOL", p["min_bar_dollar_vol"]),  # kırılım mumunda en az bu kadar $ işlem
         tp_r=tp[:3],
         atr_n=_i("ATR_N", 14),
-        max_signals=_i("MAX_SIGNALS", 6),
+        max_signals=_i("MAX_SIGNALS", 6),        # her taramada en fazla kaç sinyal
+        max_daily=_i("MAX_DAILY", 20),           # bir günde toplam en fazla kaç sinyal
         cooldown_days=_i("COOLDOWN_DAYS", 5),
         batch=_i("BATCH", 200),
         universe=_s("UNIVERSE", "all").lower(),  # all | nasdaq
@@ -363,7 +370,8 @@ def detect_breakout(df: pd.DataFrame, cfg: Cfg) -> Optional[dict]:
         "anchor2": str(pd.Timestamp(d.index[j]).date()),
         "vol_ratio": float(vol_ratio),
         "atr_pct": float(atr / entry * 100),
-        "score": float(vol_ratio * touches),
+        # sıralama: hacim patlaması x çizgi kalitesi x hareketlilik (az sinyal gönderirken en iyiler öne geçsin)
+        "score": float(vol_ratio * min(touches, 4) * (atr / entry * 100) ** 0.5),
     }
 
 
@@ -434,6 +442,14 @@ def save_state(path: str, state: dict) -> None:
     }
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(state, fh)
+
+
+def pick_to_send(signals: list[dict], state: dict, cfg: Cfg, today: Optional[date] = None) -> list[dict]:
+    """Yeni sinyallerden, tarama başı ve günlük üst sınırı aşmayacak kadarını (en yüksek skorlular) seç."""
+    today = today or datetime.now(timezone.utc).date()
+    sent_today = sum(1 for v in state.values() if v.get("sent") == today.isoformat())
+    room = max(0, min(cfg.max_signals, cfg.max_daily - sent_today))
+    return filter_new(signals, state, cfg, today)[:room]
 
 
 def filter_new(signals: list[dict], state: dict, cfg: Cfg, today: Optional[date] = None) -> list[dict]:
@@ -511,8 +527,8 @@ def main() -> int:
 
     signals, scanned = scan(tickers, cfg)
     state = load_state(cfg.sent_file)
-    fresh = filter_new(signals, state, cfg)[:cfg.max_signals]
-    print(f"Taranan: {scanned} | kırılım: {len(signals)} | yeni sinyal: {len(fresh)}")
+    fresh = pick_to_send(signals, state, cfg)
+    print(f"Taranan: {scanned} | kırılım: {len(signals)} | gönderilecek sinyal: {len(fresh)}")
 
     if not fresh:
         if can_send and os.getenv("SEND_EMPTY", "0") == "1":
@@ -523,10 +539,11 @@ def main() -> int:
         f"📡 <b>Düşen trend kırılımı taraması</b> — {datetime.now(timezone.utc):%Y-%m-%d}\n"
         f"{len(fresh)} yeni sinyal ({scanned} hisse tarandı). Yatırım tavsiyesi değildir."
     )
-    if can_send:
-        tg_send(token, chat_id, header)
-    else:
-        print("\n" + re.sub(r"<[^>]+>", "", header))
+    if cfg.interval == "1d":  # 15 dakikalıkta her taramada başlık mesajı gürültü olur, sadece günlükte gönder
+        if can_send:
+            tg_send(token, chat_id, header)
+        else:
+            print("\n" + re.sub(r"<[^>]+>", "", header))
 
     today = datetime.now(timezone.utc).date().isoformat()
     for s in fresh:
