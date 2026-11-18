@@ -44,3 +44,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           INTERVAL: ${{ github.event.inputs.interval || vars.INTERVAL || '15m' }}
+          # Aşağıdakiler isteğe bağlı: repo Settings > Secrets and variables > Actions > Variables
+          # bölümünden aynı adla bir değişken eklersen o değer kullanılır, yoksa koddaki varsayılan geçerli.
+          VOL_MULT: ${{ vars.VOL_MULT }}
+          MIN_ATR_PCT: ${{ vars.MIN_ATR_PCT }}
+          MIN_TOUCHES: ${{ vars.MIN_TOUCHES }}
+          MAX_SIGNALS: ${{ vars.MAX_SIGNALS }}
+          MAX_DAILY: ${{ vars.MAX_DAILY }}
+          MIN_PRICE: ${{ vars.MIN_PRICE }}
+          MIN_DOLLAR_VOL: ${{ vars.MIN_DOLLAR_VOL }}
+          MIN_BAR_DOLLAR_VOL: ${{ vars.MIN_BAR_DOLLAR_VOL }}
+          UNIVERSE: ${{ vars.UNIVERSE }}
